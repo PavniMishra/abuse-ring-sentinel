@@ -1,0 +1,42 @@
+# config.yaml
+# Central place for every tunable number in the pipeline.
+# Change values here instead of hunting through code.
+
+data:
+  n_accounts: 800
+  n_fraud_accounts_pct: 0.12          # ~12% of accounts are seeded as fraud
+  tight_ring_fraction: 0.60           # 60% of fraud nodes go into tight, obvious rings
+  distributed_fraction: 0.40          # 40% of fraud nodes are spread thin, weak links
+  n_transactions_per_account_avg: 6
+  random_seed: 42
+
+graph:
+  edge_weights:                       # higher weight = stronger/rarer shared signal
+    shared_bank_fp: 1.0               # rarest, strongest signal
+    shared_device_id: 0.6
+    shared_ip: 0.3                    # weakest, most likely coincidental (public wifi etc.)
+  max_dijkstra_distance: 5            # cap search depth for distance-to-fraud feature
+
+features:
+  new_account_days_threshold: 7       # accounts younger than this are "new"
+  velocity_window_hours: 24           # window for transaction velocity feature
+
+model:
+  type: "random_forest"               # random_forest | gradient_boosting
+  n_estimators: 200
+  max_depth: 8
+  test_size: 0.25
+  random_seed: 42
+  risk_threshold: 0.5                 # score above this => flagged
+
+cost:
+  false_positive_cost_inr: 450        # cost of wrongly blocking a legit customer (goodwill + support)
+  false_negative_cost_inr: 3200       # cost of missing real fraud (average fraud loss per account)
+
+paths:
+  accounts_csv: "data/accounts.csv"
+  transactions_csv: "data/transactions.csv"
+  features_csv: "data/features.csv"
+  model_path: "model/model.pkl"
+  audit_log_path: "audit/audit_log.jsonl"
+  validation_set_csv: "data/manual_validation_set.csv"

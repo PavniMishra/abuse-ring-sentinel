@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Abuse-Ring Sentinel</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; background: #111; color: #eee; }
+  h1 { color: #e0a458; }
+  input, button { font-size: 1rem; padding: 8px; margin-right: 8px; }
+  #result { margin-top: 24px; padding: 16px; border-radius: 8px; background: #1c1c1c; white-space: pre-wrap; }
+  .flagged { border-left: 4px solid #e05858; }
+  .clear { border-left: 4px solid #58e08a; }
+</style>
+</head>
+<body>
+  <h1>Abuse-Ring Sentinel</h1>
+  <p>Enter an account ID to check risk before payment.</p>
+  <input id="accountId" placeholder="acc_xxxxxxxx" />
+  <button onclick="checkAccount()">Check</button>
+  <div id="result"></div>
+
+  <script>
+    async function checkAccount() {
+      const id = document.getElementById('accountId').value.trim();
+      const resultDiv = document.getElementById('result');
+      resultDiv.className = '';
+      resultDiv.textContent = 'Checking...';
+      try {
+        const res = await fetch(`/api/score/${id}`);
+        const data = await res.json();
+        if (data.error) {
+          resultDiv.textContent = data.error;
+          return;
+        }
+        resultDiv.className = data.verdict === 'flagged' ? 'flagged' : 'clear';
+        resultDiv.textContent =
+          `Verdict: ${data.verdict.toUpperCase()}\n` +
+          `Risk score: ${data.risk_score} (threshold ${data.threshold})\n\n` +
+          `${data.explanation}`;
+      } catch (e) {
+        resultDiv.textContent = 'Error: ' + e;
+      }
+    }
+  </script>
+</body>
+</html>
