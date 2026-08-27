@@ -20,7 +20,11 @@ def load_config(path="config.yaml"):
         return yaml.safe_load(f)
 
 
-def build_graph(accounts_df: pd.DataFrame, cfg: dict) -> nx.Graph:
+def build_graph(accounts_df: pd.DataFrame, cfg: dict, min_weight: float = 0.0) -> nx.Graph:
+    """Builds the account graph. min_weight filters out edges below that
+    strength — pass min_weight=0.5 (roughly) to get a "strong signals only"
+    graph (bank fingerprint / device), excluding weak coincidental IP
+    overlap. Default (0.0) includes every edge."""
     weights = cfg["graph"]["edge_weights"]
     G = nx.Graph()
 
@@ -31,9 +35,6 @@ def build_graph(accounts_df: pd.DataFrame, cfg: dict) -> nx.Graph:
             created_at=row["created_at"],
         )
 
-    # Group accounts by each shared attribute, then connect every pair
-    # within a group. This is O(n) per attribute type via bucketing,
-    # rather than an O(n^2) all-pairs comparison.
     attribute_specs = [
         ("device_id", weights["shared_device_id"]),
         ("ip", weights["shared_ip"]),
@@ -41,6 +42,8 @@ def build_graph(accounts_df: pd.DataFrame, cfg: dict) -> nx.Graph:
     ]
 
     for attr, weight in attribute_specs:
+        if weight < min_weight:
+            continue  # skip this attribute type entirely if too weak
         buckets = defaultdict(list)
         for _, row in accounts_df.iterrows():
             buckets[row[attr]].append(row["account_id"])
@@ -52,7 +55,6 @@ def build_graph(accounts_df: pd.DataFrame, cfg: dict) -> nx.Graph:
                 for j in range(i + 1, len(members)):
                     a, b = members[i], members[j]
                     if G.has_edge(a, b):
-                        # keep the strongest (max) weight if multiple shared attrs
                         if weight > G[a][b]["weight"]:
                             G[a][b]["weight"] = weight
                             G[a][b]["shared_attr"] = attr

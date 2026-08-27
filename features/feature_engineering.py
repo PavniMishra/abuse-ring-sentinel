@@ -50,7 +50,6 @@ def compute_account_level_features(accounts_df: pd.DataFrame, transactions_df: p
     accounts_df["amount_mean"] = accounts_df["amount_mean"].fillna(0)
     accounts_df["amount_std"] = accounts_df["amount_std"].fillna(0)
 
-    # crude velocity proxy: txns per day since account creation
     accounts_df["velocity_per_day"] = accounts_df["txn_count"] / accounts_df["account_age_days"].clip(lower=1)
 
     return accounts_df
@@ -60,8 +59,12 @@ def build_feature_table(cfg: dict) -> pd.DataFrame:
     accounts_df = load_accounts(cfg)
     transactions_df = pd.read_csv(cfg["paths"]["transactions_csv"])
 
-    G = build_graph(accounts_df, cfg)
-    graph_features = run_all(G, max_distance=cfg["graph"]["max_dijkstra_distance"])
+    # Two graphs: v1 sees only strong signals (bank fp / device); v2's
+    # distance metric runs on the full graph, including weak IP edges,
+    # so it can reach accounts v1's clustering can't see at all.
+    G_strong = build_graph(accounts_df, cfg, min_weight=0.5)
+    G_full = build_graph(accounts_df, cfg, min_weight=0.0)
+    graph_features = run_all(G_strong, G_full, max_distance=cfg["graph"]["max_dijkstra_distance"])
     graph_df = pd.DataFrame.from_dict(graph_features, orient="index").reset_index()
     graph_df = graph_df.rename(columns={"index": "account_id"})
 
@@ -69,7 +72,6 @@ def build_feature_table(cfg: dict) -> pd.DataFrame:
 
     merged = account_features_df.merge(graph_df, on="account_id", how="left")
 
-    # clean up: cap infinite distance to a large finite number for the model
     max_dist_cap = cfg["graph"]["max_dijkstra_distance"] * 10
     merged["distance_to_fraud"] = merged["distance_to_fraud"].replace(
         [float("inf")], max_dist_cap

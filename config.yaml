@@ -8,7 +8,7 @@ data:
   tight_ring_fraction: 0.60           # 60% of fraud nodes go into tight, obvious rings
   distributed_fraction: 0.40          # 40% of fraud nodes are spread thin, weak links
   n_transactions_per_account_avg: 6
-  random_seed: 42
+  random_seed: "random"
 
 graph:
   edge_weights:                       # higher weight = stronger/rarer shared signal

@@ -17,28 +17,21 @@ import csv
 import random
 import uuid
 from datetime import datetime, timedelta
-
 import yaml
-
 
 def load_config(path="config.yaml"):
     with open(path) as f:
         return yaml.safe_load(f)
 
-
 def random_id(prefix):
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
-
 
 def random_date(days_back_max=365):
     days_back = random.randint(0, days_back_max)
     return (datetime.now() - timedelta(days=days_back)).isoformat()
 
-
 def make_pool_attribute(prefix, size):
-    """A pool of shareable attributes (devices/IPs/bank fingerprints)."""
     return [random_id(prefix) for _ in range(size)]
-
 
 def generate_accounts(cfg):
     n = cfg["data"]["n_accounts"]
@@ -48,26 +41,32 @@ def generate_accounts(cfg):
     n_tight = int(n_fraud * tight_frac)
     n_distributed = n_fraud - n_tight
 
-    random.seed(cfg["data"]["random_seed"])
+    # --- DYNAMIC SEED LOGIC ---
+    seed_val = cfg["data"].get("random_seed")
+    if seed_val == "random" or seed_val is None:
+        random.seed()
+        print("Using purely random seed: Every run will generate a unique topology.")
+    else:
+        random.seed(seed_val)
+        print(f"Using fixed seed: {seed_val}")
+    # --------------------------
 
     accounts = []
 
-    # A SMALL pool of "public wifi"-style IPs that a minority of accounts
-    # coincidentally share. Everyone else gets a unique IP. This is the
-    # key fix that keeps the graph sparse and meaningful: if too many
-    # accounts drew from a small IP pool, the whole graph would collapse
-    # into one giant connected component and component-size would stop
-    # being an informative signal.
-    shared_ip_pool = make_pool_attribute("ip", size=max(8, n // 60))
-    P_SHARE_PUBLIC_IP = 0.10  # ~10% of accounts coincidentally overlap on a public IP
+    fraud_ip_pool = make_pool_attribute("ip_fraud", size=4)
+    general_ip_pool = make_pool_attribute("ip", size=max(8, n // 60))
 
-    def draw_ip():
-        if random.random() < P_SHARE_PUBLIC_IP:
-            return random.choice(shared_ip_pool)
-        return random_id("ip")  # unique to this account
+    P_SHARE_PUBLIC_IP = 0.10
+    P_SHARE_FRAUD_IP_DISTRIBUTED = 0.85
+    P_CROSSOVER_LEGIT_ON_FRAUD_IP = 0.03
 
-    # --- Tight rings: small clusters (3-6 accounts) sharing ONE bank fingerprint
-    #     AND usually the same device. This is the strong, obvious signal. ---
+    def draw_ip(fraud_prob=0.0, general_prob=P_SHARE_PUBLIC_IP):
+        if random.random() < fraud_prob:
+            return random.choice(fraud_ip_pool)
+        if random.random() < general_prob:
+            return random.choice(general_ip_pool)
+        return random_id("ip")
+
     tight_ring_accounts = []
     i = 0
     while i < n_tight:
@@ -78,7 +77,7 @@ def generate_accounts(cfg):
             acc_id = random_id("acc")
             accounts.append({
                 "account_id": acc_id,
-                "created_at": random_date(days_back_max=10),  # rings tend to be new
+                "created_at": random_date(days_back_max=10),
                 "device_id": ring_device if random.random() < 0.7 else random_id("dev"),
                 "ip": draw_ip(),
                 "bank_fp": ring_bank_fp,
@@ -87,49 +86,50 @@ def generate_accounts(cfg):
             tight_ring_accounts.append(acc_id)
         i += ring_size
 
-    # --- Distributed fraud: own device, own bank fp — the ONLY thing that
-    #     can connect them to anything else is an occasional shared public
-    #     IP. This is what v1 (connected components) will tend to miss and
-    #     v2 (distance-to-fraud) is designed to catch. ---
     distributed_accounts = []
     for _ in range(n_distributed):
         acc_id = random_id("acc")
+        blends_in = random.random() < 0.5
         accounts.append({
             "account_id": acc_id,
-            "created_at": random_date(days_back_max=60),
-            "device_id": random_id("dev"),   # own device, no strong link
-            "ip": draw_ip(),                  # only sometimes overlaps
-            "bank_fp": random_id("bank"),     # own bank fp, no strong link
+            "created_at": random_date(days_back_max=300 if blends_in else 60),
+            "device_id": random_id("dev"),
+            "ip": draw_ip(fraud_prob=P_SHARE_FRAUD_IP_DISTRIBUTED),
+            "bank_fp": random_id("bank"),
             "is_fraud": 1,
+            "_low_velocity": blends_in,
         })
         distributed_accounts.append(acc_id)
 
-    # --- Legit accounts: unique device/bank, occasional coincidental
-    #     public-IP overlap with anyone (fraud or legit) — this is the
-    #     "innocent overlap" the model has to learn NOT to over-trust. ---
     n_legit = n - n_fraud
     for _ in range(n_legit):
+        looks_suspicious = random.random() < 0.08
         accounts.append({
             "account_id": random_id("acc"),
-            "created_at": random_date(days_back_max=365),
+            "created_at": random_date(days_back_max=10 if looks_suspicious else 365),
             "device_id": random_id("dev"),
-            "ip": draw_ip(),
+            "ip": draw_ip(fraud_prob=P_CROSSOVER_LEGIT_ON_FRAUD_IP),
             "bank_fp": random_id("bank"),
             "is_fraud": 0,
+            "_high_velocity": looks_suspicious,
         })
 
     random.shuffle(accounts)
     return accounts
 
-
 def generate_transactions(cfg, accounts):
     avg_txn = cfg["data"]["n_transactions_per_account_avg"]
     transactions = []
     for acc in accounts:
-        # fraud accounts tend to have bursty velocity
         n_txn = max(1, int(random.gauss(avg_txn, 2)))
-        if acc["is_fraud"] == 1 and random.random() < 0.5:
-            n_txn += random.randint(5, 15)  # velocity spike
+
+        if acc.get("_low_velocity"):
+            pass
+        elif acc["is_fraud"] == 1 and random.random() < 0.5:
+            n_txn += random.randint(5, 15)
+
+        if acc.get("_high_velocity"):
+            n_txn += random.randint(5, 15)
 
         base_amount = random.uniform(200, 5000)
         for _ in range(n_txn):
@@ -142,13 +142,11 @@ def generate_transactions(cfg, accounts):
             })
     return transactions
 
-
 def write_csv(rows, path, fieldnames):
     with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
-
 
 def main():
     cfg = load_config()
@@ -170,7 +168,6 @@ def main():
     print(f"Generated {len(accounts)} accounts ({n_fraud} fraud, {len(accounts) - n_fraud} legit)")
     print(f"Generated {len(transactions)} transactions")
     print(f"Wrote {cfg['paths']['accounts_csv']} and {cfg['paths']['transactions_csv']}")
-
 
 if __name__ == "__main__":
     main()
